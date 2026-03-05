@@ -1,0 +1,11 @@
+# video
+*.mp4
+*.avi
+*.mov
+
+# binary
+*.bin
+
+# python
+__pycache__/
+*.pyc
