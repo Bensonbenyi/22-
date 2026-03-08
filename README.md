@@ -16,10 +16,19 @@
 ## 🗂️ 文件结构
 
 ```
-weblab01/
-├── encode.py          # 二进制 → 视频编码器
-├── decode.py          # 视频 → 二进制解码器
-└── README.md          # 本文件
+project/
+├── encode.py          # 编码核心逻辑实现
+├── decode.py          # 解码核心逻辑实现
+├── frame_design.py    # 帧结构设计与处理
+├── qr_encode.py       # QR码编码模块
+├── qr_decode.py       # QR码解码模块
+├── video_generate.py  # 视频生成与编码输出
+├── video_decode.py    # 视频解析与解码输入
+├── main_encode.py     # 编码流程主入口
+├── main_decode.py     # 解码流程主入口
+├── input.bin          # 待编码的二进制输入文件
+├── out.mp4            # 编码生成的视频输出文件
+└── vout.bin           # 解码输出的二进制文件
 ```
 
 ---
