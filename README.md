@@ -202,4 +202,4 @@ cmd = f"ffmpeg -y -framerate {fps} -i frames/frame_%05d.png -c:v libx264 -crf 18
 
 *WebLab 项目*
 
-**最后修改**: 2026 年 3 月 5 日
+**最后修改**: 2026 年 3 月 8 日
