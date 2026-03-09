@@ -11,3 +11,4 @@ __pycache__/
 *.pyc
 
 *.png
+src/frames_output.txt
