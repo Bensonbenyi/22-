@@ -20,12 +20,16 @@ def read_file(file_path):
         return None
 
 
+# def bytes_to_bits(data_bytes):
+#     """字节转比特串"""
+#     bits = ''
+#     for byte in data_bytes:
+#         bits += format(byte, '08b')
+#     return bits
+# 写法更高效点：
 def bytes_to_bits(data_bytes):
-    """字节转比特串"""
-    bits = ''
-    for byte in data_bytes:
-        bits += format(byte, '08b')
-    return bits
+    """字节转比特串 - 推荐的高性能写法"""
+    return "".join(format(byte, '08b') for byte in data_bytes)
 
 
 def split_into_payloads(bitstream):
@@ -35,9 +39,10 @@ def split_into_payloads(bitstream):
 
     for i in range(0, total_bits, PAYLOAD_LEN):
         payload = bitstream[i:i + PAYLOAD_LEN]
-        if len(payload) < PAYLOAD_LEN:
-            payload = payload.ljust(PAYLOAD_LEN, '0')
-            print(f"最后一块填充: {len(payload)}位")
+        # if len(payload) < PAYLOAD_LEN:
+        #     payload = payload.ljust(PAYLOAD_LEN, '0')
+        #     print(f"最后一块填充: {len(payload)}位")
+        # 注意：这里不需要手动补0，build_frame会自动处理
         payloads.append(payload)
 
     return payloads
@@ -54,13 +59,14 @@ def generate_frames(file_path):
     bitstream = bytes_to_bits(data_bytes)
     print(f"比特串长度: {len(bitstream)} 位")
 
-    # 3. 切分payload
-    payloads = split_into_payloads(bitstream)
+    # 3. 切分数据块
+    payload_chunks = split_into_payloads(bitstream)
 
-    # 4. 生成帧
+    # 4. 生成带序号的帧
     frames = []
-    for payload in payloads:
-        frame = build_frame(payload)
+    for i, chunk in enumerate(payload_chunks):
+        # 【核心修改】：传入 chunk 和 当前帧序号 i
+        frame = build_frame(chunk, i)
         frames.append(frame)
 
     print(f"生成帧数: {len(frames)}")
@@ -120,12 +126,16 @@ if __name__ == "__main__":
     # 编码测试
     frames = encode_file(test_file)
 
-    # 显示前3个帧
-    print("\n前3个帧:")
-    for i in range(min(3, len(frames))):
-        frame = frames[i]
-        print(f"帧{i}: {frame}")
-        print(f"    头:{frame[:8]} 数据:{frame[8:72]} CRC:{frame[72:]}")
-
+    # 3. 打印第一个帧的结构分析 (用于核对)
+    if frames:
+        f = frames[0]
+        # HEADER(8) | ID(16) | LEN(8) | PAYLOAD(1264) | CRC(16)
+        print("\n第一帧结构分析:")
+        print(f"Header: {f[:8]}")
+        print(f"ID bits: {f[8:24]}")
+        print(f"Length bits: {f[24:32]}")
+        print(f"Data Sample (first 16 bits): {f[32:48]}")
+        print(f"CRC: {f[-16:]}")
+        
     # 保存调试文件
     save_frames(frames, "frames_output.txt")
