@@ -1,13 +1,13 @@
 """
 Smart-Grid Frame Design Module (Optimized for 41x41)
 
-Frame Structure (Total bits: 1312 bits ≈ 164 Bytes):
-| HEADER(8) | FRAME_ID(16) | DATA_LEN(8) | PAYLOAD(1264) | CRC(16) |
+Frame Structure (Total bits: 1480 bits ≈ 185 Bytes):
+| HEADER(8) | FRAME_ID(16) | DATA_LEN(8) | PAYLOAD(1432) | CRC(16) |
 
 HEADER   : Synchronization pattern "10101010"
 FRAME_ID : 0-65535, tracks frame order
-DATA_LEN : 0-158, how many BYTES in this payload are real data
-PAYLOAD  : Actual data bits (1264 bits max)
+DATA_LEN : 0-179, how many BYTES in this payload are real data
+PAYLOAD  : Actual data bits (1432 bits max)
 CRC      : Error detection
 """
 
@@ -15,10 +15,10 @@ HEADER = "10101010"
 HEADER_LEN = 8
 ID_LEN = 16
 LEN_FIELD_BIT = 8      # 用8位记录这帧存了多少字节载荷
-PAYLOAD_LEN = 1264     # 158 字节 * 8
+PAYLOAD_LEN = 1432     # 179 字节 * 8
 CRC_LEN = 16
 
-# 总帧长：8 + 16 + 8 + 1264 + 16 = 1312 bits
+# 总帧长：8 + 16 + 8 + 1432 + 16 = 1480 bits
 FRAME_LEN = HEADER_LEN + ID_LEN + LEN_FIELD_BIT + PAYLOAD_LEN + CRC_LEN
 
 def compute_crc(data_string: str) -> str:
@@ -75,7 +75,7 @@ def parse_frame(frame_bits: str):
     if compute_crc(check_area) != received_crc:
         return None, None
 
-    # 【核心修改】：根据 data_len_in_bytes 只截取有效数据
+    # 根据 data_len_in_bytes 只截取有效数据
     valid_bit_count = data_len_in_bytes * 8
     real_payload = payload[:valid_bit_count]
 
@@ -98,7 +98,7 @@ def split_bitstream(bitstream: str):
     return frames
 
 def frames_to_bitstream(frames):
-    """
+    """  
     从所有帧中提取并排序拼接有效数据
     """
     payload_dict = {}

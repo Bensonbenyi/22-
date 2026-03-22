@@ -6,141 +6,226 @@ import cv2
 import numpy as np
 import os
 from frame_design import parse_frame, PAYLOAD_LEN
+from perspective_transform import correct_frame, reset_frame_hash
 
-# --- 必须与发送端完全一致的参数 ---
-QR_SIZE = 41 
-# 考虑到边框(2格)，总格数为 41 + 2*2 = 45
-# 假设发送端 scale=15，图像大概 675 像素
-# 这里我们用动态计算，不锁死 MODULE_SIZE
+QR_SIZE = 41
+FRAME_BITS = 1480  # 更新为新的帧长度：8 + 16 + 8 + 1432 + 16 = 1480
 
-def extract_frames(video_path):
-    """从视频中提取每一帧"""
-    if not os.path.exists(video_path):
-        print(f"[-] 错误: 找不到视频文件 {video_path}")
-        return []
+
+# =========================
+# 1. 定位并截取（使用透视变换）
+# =========================
+def get_corrected_qr(frame):
+    # 使用 perspective_transform.py 中的 correct_frame 进行透视变换
+    result = correct_frame(frame)
     
-    cap = cv2.VideoCapture(video_path)
-    frames = []
-    while True:
-        ret, frame = cap.read()
-        if not ret: break
-        frames.append(frame)
-    cap.release()
-    print(f"[*] 视频读取完成，共提取 {len(frames)} 帧")
-    return frames
+    if result is None:
+        return None
+    
+    if isinstance(result, str) and result == "SKIP":
+        return "SKIP"
+    
+    # 转换为灰度图
+    gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+    
+    return gray
 
-def get_matrix_from_binary(binary_img):
-    """
-    核心算法：将二值化图像转回 41x41 矩阵
-    目前是“理想状态”解码：假设视频没有形变
-    """
-    h, w = binary_img.shape
-    # 自动计算每个格子的像素大小 (考虑到 2格的 Quiet Zone)
-    grid_count = QR_SIZE + 4  # 41 + 2*2
-    module_w = w / grid_count
-    module_h = h / grid_count
-
+# =========================
+# 2. 采样（修正：只采样，不画图）
+# =========================
+def get_matrix_from_binary(qr_img):
+    # 先做一次全局二值化，提高 patch 均值判断的准确度
+    _, binary = cv2.threshold(qr_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # 透视变换后的图片是 674x674，45x45 格子
+    # 674 / 45 ≈ 15 像素/格
+    unit = 674 / 45  # 每格约 15 像素
     matrix = np.zeros((QR_SIZE, QR_SIZE), dtype=int)
 
     for i in range(QR_SIZE):
         for j in range(QR_SIZE):
-            # 计算采样点：跳过 2 格边框，取每个格子的中心
-            py = int((i + 2.5) * module_h)
-            px = int((j + 2.5) * module_w)
+            # 计算采样中心点：跳过 2 格白边，采样点在 (i+0.5) 格
+            cy = int((2 + i + 0.5) * unit)
+            cx = int((2 + j + 0.5) * unit)
             
-            # 采样并二值化 (黑色为1, 白色为0)
-            if binary_img[py, px] < 128:
-                matrix[i, j] = 1
-            else:
-                matrix[i, j] = 0
+            # 5x5 区域采样（比 3x3 更稳，不容易被压缩噪点干扰）
+            patch = binary[max(0,cy-2):cy+3, max(0,cx-2):cx+3]
+            
+            # 核心：均值 < 127 代表黑色，存为 1
+            matrix[i, j] = 1 if np.mean(patch) < 127 else 0
+            
     return matrix
 
+# =========================
+# 3. 提取比特（修正：严格对齐发送端 Mask）
+# =========================
 def matrix_to_bits(matrix):
-    """
-    根据 data_mask 提取比特流 (必须跳过定位符)
-    """
-    # 1. 重新生成 mask (必须与发送端 video_generate.py 完全一致)
-    data_mask = np.ones((QR_SIZE, QR_SIZE), dtype=bool)
-    data_mask[0:7, 0:7] = False
-    data_mask[0:7, QR_SIZE-7:QR_SIZE] = False
-    data_mask[QR_SIZE-7:QR_SIZE, 0:7] = False
-    # 扣除右下角美化后的 5x5 区域
-    data_mask[QR_SIZE-8:QR_SIZE-3, QR_SIZE-8:QR_SIZE-3] = False
+    # 建立一个"数据掩码"
+    # 默认全部是数据 (True)
+    is_data = np.ones((QR_SIZE, QR_SIZE), dtype=bool)
 
-    # 2. 提取数据
-    available_coords = np.argwhere(data_mask)
-    bits = ""
-    for r, c in available_coords:
-        bits += str(matrix[r, c])
+    # 剔除四个角的 7x7 定位符区域 (False)
+    is_data[0:7, 0:7] = False
+    is_data[0:7, QR_SIZE-7:QR_SIZE] = False
+    is_data[QR_SIZE-7:QR_SIZE, 0:7] = False
+    is_data[QR_SIZE-7:QR_SIZE, QR_SIZE-7:QR_SIZE] = False
+
+    bits = []
+    # 按照行优先顺序提取所有 True (数据) 区域
+    for i in range(QR_SIZE):
+        for j in range(QR_SIZE):
+            if is_data[i, j]:
+                bits.append(str(matrix[i, j]))
     
-    # 只需要返回前 1312 位（Header+ID+Len+Payload+CRC）
-    # 这里的 1312 = 8 + 16 + 8 + 1264 + 16
-    return bits[:1312]
+    # 拼接成字符串并截断到 header+payload 的固定长度
+    return "".join(bits)[:FRAME_BITS]
 
+# =========================
+# 4. 视频处理
+# =========================
 def process_video_to_bits(video_path):
-    """解码全流程"""
-    raw_frames = extract_frames(video_path)
-    all_frame_bits = []
+    cap = cv2.VideoCapture(video_path)
 
-    for i, frame in enumerate(raw_frames):
-        # 1. 预处理
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+    all_bits = []
+    frame_count = 0
+    success = 0
 
-        # 2. 采样矩阵
-        matrix = get_matrix_from_binary(binary)
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-        # 3. 转为比特字符串
-        bits = matrix_to_bits(matrix)
-        all_frame_bits.append(bits)
+        frame_count += 1
+
+        qr = get_corrected_qr(frame)
+        if qr is None:
+            continue
         
-    return all_frame_bits
+        if isinstance(qr, str) and qr == "SKIP":
+            continue
 
-def save_bits_to_file(frame_bits_list, output_path):
-    """
-    核心：去重、解析并合成文件
-    """
-    received_data = {} # 使用字典按 ID 去重 {id: payload}
+        matrix = get_matrix_from_binary(qr)
+        bits = matrix_to_bits(matrix)
+
+        all_bits.append(bits)
+        success += 1
+
+    cap.release()
+
+    print(f"[*] 总帧: {frame_count} | 成功提取: {success}")
+    return all_bits
+
+
+# =========================
+# 5. 保存文件
+# =========================
+def save_bits_to_file(frame_bits_list, output_path, max_frame_id=None):
+    received = {}
+    HEADER = "10101010"
+
+    ok = 0
+    fail = 0
+    skipped = 0
 
     for bits in frame_bits_list:
-        # 调用之前 frame_design.py 里的解析函数
-        # result 应该是 (frame_id, payload_data)
-        result = parse_frame(bits)
-        
-        if result:
-            f_id, payload = result
-            if f_id not in received_data:
-                received_data[f_id] = payload
-    
-    if not received_data:
-        print("[-] 错误：未能解析出任何有效帧")
+        # Header 对齐
+        if not bits.startswith(HEADER):
+            idx = bits.find(HEADER)
+            if 0 <= idx < 20:
+                bits = bits[idx:].ljust(FRAME_BITS, '0')
+
+        f_id, payload = parse_frame(bits)
+
+        if payload is not None:
+            # 检查帧ID是否在合理范围内
+            if max_frame_id is not None and f_id > max_frame_id:
+                skipped += 1
+                continue
+            ok += 1
+            if f_id not in received:
+                received[f_id] = payload
+        else:
+            fail += 1
+
+    print(f"[解析统计] 成功:{ok} 失败:{fail} 跳过(超出范围):{skipped}")
+
+    if not received:
+        print("[-] 没有有效帧")
         return
 
-    # 按 ID 排序并拼接
-    sorted_ids = sorted(received_data.keys())
-    full_bitstream = "".join(received_data[i] for i in sorted_ids)
+    sorted_ids = sorted(received.keys())
+    bitstream = "".join(received[i] for i in sorted_ids)
 
-    # 比特流转回二进制文件
-    byte_list = []
-    for i in range(0, len(full_bitstream), 8):
-        byte_str = full_bitstream[i:i+8]
-        if len(byte_str) == 8:
-            byte_list.append(int(byte_str, 2))
-    
+    data = [
+        int(bitstream[i:i+8], 2)
+        for i in range(0, len(bitstream), 8)
+        if i + 8 <= len(bitstream)
+    ]
+
     with open(output_path, "wb") as f:
-        f.write(bytes(byte_list))
-    print(f"[+] 文件已恢复: {output_path}, 共 {len(sorted_ids)} 帧")
+        f.write(bytes(data))
 
+    print(f"[+] 恢复完成！帧数: {len(sorted_ids)}")
+
+
+# =========================
+# 6. 文件对比（不动）
+# =========================
+def compare_files(decoded_file, original_file, output_file="vout.bin"):
+    if not os.path.exists(decoded_file) or not os.path.exists(original_file):
+        print("[-] 缺少文件")
+        return False
+
+    with open(decoded_file, "rb") as f:
+        dec = f.read()
+    with open(original_file, "rb") as f:
+        ori = f.read()
+
+    max_len = max(len(dec), len(ori))
+    res = []
+
+    for i in range(max_len):
+        if i < len(dec) and i < len(ori):
+            res.append((~(dec[i] ^ ori[i])) & 0xFF)
+        else:
+            res.append(0)
+
+    with open(output_file, "wb") as f:
+        f.write(bytes(res))
+
+    correct = sum(bin(b).count("1") for b in res)
+    total = max_len * 8
+
+    print(f"[+] 准确率: {correct / total * 100:.2f}%")
+    return True
+
+
+# =========================
+# main
+# =========================
 def main():
-    video_input = "transmitter_video.mp4" # 发送端生成的视频
-    file_output = "out.bin"               # 恢复出的文件
+    video_input = "transmitter_video.mp4"
+    file_output = "out.bin"
+    original_file = "input.bin"
 
-    # 1. 从视频提取比特流
-    print(f"[*] 开始处理视频: {video_input}")
-    bits_list = process_video_to_bits(video_input)
+    # 重置帧哈希缓存，确保每次运行都是全新的处理
+    reset_frame_hash()
 
-    # 2. 解析并保存
-    save_bits_to_file(bits_list, file_output)
+    # 计算预期的最大帧数（基于原始文件大小）
+    import os
+    if os.path.exists(original_file):
+        original_size = os.path.getsize(original_file)
+        # 每帧payload字节数 = PAYLOAD_LEN // 8 = 179
+        expected_frames = (original_size + 178) // 179  # 向上取整
+        max_frame_id = expected_frames + 2  # 允许一些冗余
+        print(f"[信息] 原始文件: {original_size} bytes, 预期帧数: {expected_frames}, 最大帧ID: {max_frame_id}")
+    else:
+        max_frame_id = None
+
+    bits = process_video_to_bits(video_input)
+    save_bits_to_file(bits, file_output, max_frame_id)
+    compare_files(file_output, original_file)
+
 
 if __name__ == "__main__":
     main()

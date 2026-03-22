@@ -1,24 +1,20 @@
 """
-video_generate.py - 视觉发送核心模块 (Visual Transmitter)
+video_generate.py
 
 功能描述:
     本模块负责将编码后的 01 比特流帧 (Bit-frames) 转化为物理可视的图像信号。
-    它采用 41x41 的自定义二维码矩阵结构，并集成了 L-Sign 定位系统。
+    它采用 41x41 的自定义二维码矩阵结构，四个角都使用 7x7 '回'字形定位符。
 
 核心逻辑:
-    1. 矩阵映射: 将 1312 bits 的帧数据映射到 41x41 的 Numpy 矩阵中。
-    2. 定位符绘制: 在矩阵的三个角绘制 7x7 '回'字形定位符，右下角绘制方向标识块。
+    1. 矩阵映射: 将 1480 bits 的帧数据映射到 41x41 的 Numpy 矩阵中。
+    2. 定位符绘制: 在矩阵的四个角绘制 7x7 '回'字形定位符（统一格式）。
     3. 图像增强: 使用 INTER_NEAREST 插值放大像素，并添加白色保护带 (Quiet Zone)。
     4. 视频合成: 调用 OpenCV VideoWriter 将图像序列封装为 .mp4 格式。
 
 参数规范:
     - QR_SIZE: 41 (矩阵规格)
     - Scale: 15 (单格像素缩放倍化)
-    - FPS: 建议 10-15 (适配手机快门同步)
-
-协作说明:
-    输入接口: 接受由 encode.py 产生的 frame_bits 列表。
-    输出接口: 在指定路径生成用于播放传输的视频文件。
+    - FPS: 10-15 (适配手机快门同步)
 """
 import os
 import numpy as np
@@ -42,26 +38,20 @@ def frame_to_qr(frame_bits):
         m[x+1:x+6, y+1:y+6] = 0    # 中层白块
         m[x+2:x+5, y+2:y+5] = 1    # 内层黑块
 
-    # 3. 绘制三个角的定位符
+    # 3. 绘制四个角的定位符（统一为相同的7x7回字形）
     draw_finder(matrix, 0, 0)                  # 左上
     draw_finder(matrix, 0, QR_SIZE - 7)         # 右上
     draw_finder(matrix, QR_SIZE - 7, 0)         # 左下
+    draw_finder(matrix, QR_SIZE - 7, QR_SIZE - 7)  # 右下（改为与其他三个角相同）
 
-    # 4. 绘制右下角的方向标 (3x3 实心黑块，用于区分方向)
-    rx, ry = QR_SIZE - 8, QR_SIZE - 8
-    matrix[rx:rx+5, ry:ry+5] = 1               # 5x5 黑框
-    matrix[rx+1:rx+4, ry+1:ry+4] = 0           # 3x3 白框
-    matrix[rx+2, ry+2] = 1                     # 中心 1x1 黑点
-
-    # 5. 提取可填充数据的区域 (遮罩 Mask)
+    # 5. 提取可填充数据的区域 (遮罩 Mask) 
     # 创建一个和 matrix 一样大的布尔矩阵，标记哪里可以填数据
     data_mask = np.ones((QR_SIZE, QR_SIZE), dtype=bool)
-    # 扣除左上、右上、左下三个 7x7 区域
+    # 扣除四个角的 7x7 定位符区域
     data_mask[0:7, 0:7] = False
     data_mask[0:7, QR_SIZE-7:QR_SIZE] = False
     data_mask[QR_SIZE-7:QR_SIZE, 0:7] = False
-    # 扣除右下角方向标区域
-    data_mask[rx:rx+5, ry:ry+5] = False
+    data_mask[QR_SIZE-7:QR_SIZE, QR_SIZE-7:QR_SIZE] = False
 
     # 6. 填充 frame_bits 到数据区
     bits = [int(b) for b in frame_bits]
@@ -113,7 +103,7 @@ def generate_frame_image(frame_bits, scale=15):
 
     return img_with_border
 
-def generate_video(frames, output_path="output_video.mp4", fps=10):
+def generate_video(frames, output_path="transmitter_video.mp4", fps=10):
     """
     将多帧二维码生成视频
     """

@@ -1,15 +1,17 @@
-# 二进制数据视频编解码项目
+# 可见光通信 - 二进制数据视频编解码项目
 
 ## 📋 项目简介
 
-这是一个将**二进制文件编码成视频**，再从**视频解码恢复二进制数据**的工具集。
+这是一个将**二进制文件编码成二维码视频**，再从**视频解码恢复二进制数据**的可见光通信工具集。
 
 核心思想：
-- 将二进制文件的每一位转换为图像中的像素（1 → 白色，0 → 黑色）
-- 将这些图像序列编码为 MP4 视频
-- 反向过程：从视频帧提取亮度信息恢复原二进制数据
+- 将二进制文件的每一位转换为 41×41 二维码矩阵中的像素（1 → 黑色，0 → 白色）
+- 采用类 QR Code 的帧结构设计，包含帧头、帧序号、数据长度、CRC 校验
+- 在矩阵三个角绘制 7×7 回字形定位符，右下角绘制方向标识块
+- 将这些二维码帧序列编码为 MP4 视频
+- 反向过程：从视频帧提取定位点，通过透视变换纠正，采样恢复二维码矩阵，提取比特流恢复原二进制数据
 
-这可应用于 **隐写术**、**数据冗余编码**、**创意媒体存储** 等场景。
+这可应用于 **可见光通信**、**数据冗余编码**、**创意媒体存储** 等场景。
 
 ---
 
@@ -17,18 +19,16 @@
 
 ```
 project/
-├── encode.py          # 编码核心逻辑实现
-├── decode.py          # 解码核心逻辑实现
-├── frame_design.py    # 帧结构设计与处理
-├── qr_encode.py       # QR码编码模块
-├── qr_decode.py       # QR码解码模块
-├── video_generate.py  # 视频生成与编码输出
-├── video_decode.py    # 视频解析与解码输入
-├── main_encode.py     # 编码流程主入口
-├── main_decode.py     # 解码流程主入口
-├── input.bin          # 待编码的二进制输入文件
-├── out.mp4            # 编码生成的视频输出文件
-└── vout.bin           # 解码输出的二进制文件
+├── src/
+│   ├── encode.py              # 编码核心逻辑：文件 → 比特流 → 帧序列
+│   ├── frame_design.py        # 帧结构设计与处理：帧头、ID、长度、CRC
+│   ├── video_generate.py      # 视频生成：帧 → 二维码图像 → MP4 视频
+│   ├── video_decode.py        # 视频解码：MP4 → 帧提取 → 透视变换 → 比特流
+│   └── perspective_transform.py  # 透视变换：4点定位与图像纠正
+├── input.bin                  # 待编码的二进制输入文件
+├── transmitter_video.mp4      # 编码生成的视频输出文件
+├── out.bin                    # 解码输出的二进制文件
+└── vout.bin                   # 视频解码检错输出的二进制文件
 ```
 
 ---
@@ -40,165 +40,167 @@ project/
 **依赖**：
 - Python 3.9+
 - OpenCV (`opencv-python`)
-- FFmpeg（视频编码/解码）
+- NumPy (`numpy`)
 
 **安装依赖**：
 ```bash
-pip install opencv-python
-# ffmpeg 可通过 brew/apt/choco 等包管理器安装
-brew install ffmpeg  # macOS
+pip install opencv-python numpy
 ```
 
 ### 2. 编码：二进制文件 → MP4 视频
 
 ```bash
-python encode.py <input.bin> <output.mp4> <duration_ms>
+cd src
+python video_generate.py
 ```
 
-**参数**：
-- `input.bin` — 输入的二进制文件（必须存在）
-- `output.mp4` — 生成的视频文件名
-- `duration_ms` — 视频时长（毫秒），整数
-
-**示例**：
-```bash
-# 创建测试二进制文件
-head -c 1024 /dev/urandom > in.bin
-
-# 编码成 3 秒的视频
-python encode.py in.bin output.mp4 3000
-```
+**输入**：
+- `input.bin` — 输入的二进制文件（如果不存在会自动创建 1KB 随机测试数据）
 
 **输出**：
-- `frames/` 目录：包含所有帧图像（`frame_00000.png`, `frame_00001.png`, ...）
-- `output.mp4`：最终视频文件
+- `transmitter_video.mp4`：生成的二维码视频文件
 
----
+**参数配置**（在 `video_generate.py` 中修改）：
+- `QR_SIZE = 41` — 二维码矩阵规格
+- `scale = 15` — 单格像素放大倍数
+- `fps = 10` — 视频帧率
 
 ### 3. 解码：MP4 视频 → 二进制文件
 
 ```bash
-python decode.py <input.mp4> <output.bin> <valid_bits.bin>
+cd src
+python video_decode.py
 ```
 
-**参数**：
-- `input.mp4` — 来自 `encode.py` 生成的视频
-- `output.bin` — 恢复的二进制输出
-- `valid_bits.bin` — 有效性掩码（8 位为一组编码，哪些位可信）
-
-**示例**：
-```bash
-python decode.py output.mp4 recovered.bin valid.bin
-```
+**输入**：
+- `transmitter_video.mp4` — 编码生成的视频
 
 **输出**：
-- `dframes/` 目录：提取的帧图像
-- `recovered.bin`：恢复的二进制数据
-- `valid.bin`：有效性信息
+- `out.bin` — 恢复的二进制数据
+- 控制台输出准确率统计
 
 ---
 
 ## 🔄 完整工作流
 
 ```bash
-# 1. 创建输入数据
-echo "Hello, World!" > message.txt
+# 1. 进入 src 目录
+cd src
 
-# 2. 编码成视频（2 秒）
-python encode.py message.txt video.mp4 2000
+# 2. 编码成视频（自动生成测试数据）
+python video_generate.py
 
 # 3. 从视频解码恢复
-python decode.py video.mp4 message_recovered.txt valid.bin
+python video_decode.py
 
-# 4. 比对原文件和恢复文件
-cmp message.txt message_recovered.txt
-echo $?  # 返回 0 表示相同，1 表示不同
+# 4. 查看恢复准确率
+# 控制台会输出: [+] 准确率: XX.XX%
 ```
 
 ---
 
 ## 📊 编码/解码原理
 
+### 帧结构设计
+
+每帧包含 1312 bits，结构如下：
+
+| 字段 | 长度 | 说明 |
+|------|------|------|
+| HEADER | 8 bits | 同步头 "10101010" |
+| FRAME_ID | 16 bits | 帧序号 0-65535，用于排序 |
+| DATA_LEN | 8 bits | 实际数据字节数（用于裁剪填充位） |
+| PAYLOAD | 1264 bits | 实际数据（158 字节 × 8） |
+| CRC | 16 bits | 校验和，覆盖 ID + LEN + PAYLOAD |
+
 ### 编码过程
 
 1. **读取二进制文件**：逐字节读取输入文件
-2. **位提取**：每字节拆分为 8 位
-3. **帧生成**：
-   - 每一位 → 一帧 400×400 像素图像
-   - 1 → 全白（255,255,255）
-   - 0 → 全黑（0,0,0）
-4. **视频合成**：用 ffmpeg 以 30 FPS 将帧序列编码为 H.264 MP4
+2. **字节转比特串**：每字节拆分为 8 位二进制字符串
+3. **切分数据块**：每 1264 位（158 字节）为一个数据块
+4. **构建帧**：为每个数据块添加帧头、帧序号、数据长度、CRC 校验
+5. **生成二维码矩阵**：
+   - 初始化 41×41 全白矩阵
+   - 在三个角绘制 7×7 回字形定位符
+   - 在右下角绘制 5×5 方向标识块
+   - 将帧比特流填充到数据区域（不足部分用随机数填充）
+6. **图像生成**：
+   - 矩阵放大 15 倍（使用 INTER_NEAREST 保持像素清晰）
+   - 添加 2 格宽度的白色保护带（Quiet Zone）
+7. **视频合成**：使用 OpenCV VideoWriter 以 10 FPS 编码为 MP4
 
 ### 解码过程
 
-1. **视频提取**：用 ffmpeg 解码 MP4，提取所有帧
-2. **亮度判断**：
-   - 计算每帧的平均灰度值
-   - 亮度 > 128 → 1
-   - 亮度 ≤ 128 → 0
-3. **位合成**：8 位为一组重组成字节
-4. **文件输出**：写出恢复的二进制和有效性掩码
+1. **视频读取**：使用 OpenCV VideoCapture 逐帧读取
+2. **去重处理**：计算帧哈希，跳过重复帧
+3. **4点定位检测**：
+   - 自适应阈值二值化
+   - 查找轮廓，识别嵌套层级 ≥ 2 的回字形结构
+   - 按面积排序，取前 4 个作为定位点
+   - 几何排序确定左上、右上、左下、右下
+4. **透视变换纠正**：
+   - 计算 4 点透视变换矩阵
+   - 将图像变换到标准 675×675 尺寸
+5. **二维码采样**：
+   - OTSU 自动阈值二值化
+   - 在标准位置采样 41×41 矩阵（每格 15 像素，跳过 2 格白边）
+6. **比特提取**：
+   - 剔除定位符和方向标识区域
+   - 按行优先顺序提取数据位
+7. **帧解析**：
+   - 滑窗搜索 HEADER（在前 32 位内）
+   - 验证 CRC 校验
+   - 根据 DATA_LEN 裁剪有效数据
+8. **数据重组**：按 FRAME_ID 排序，拼接所有有效载荷
 
 ---
 
 ## ⚙️ 配置参数
 
-可在脚本中修改以下参数影响编码：
+可在各脚本中修改以下参数：
 
 | 参数 | 位置 | 默认值 | 说明 |
 |------|------|--------|------|
-| `fps` | encode.py | 30 | 视频帧率（帧/秒） |
-| `width`, `height` | encode.py | 400, 400 | 每帧图像分辨率 |
-| `brightness_threshold` | decode.py | 128 | 亮度判定阈值 |
-| `-c:v libx264` | encode.py | — | 视频编码器（可改为 libx265 等） |
+| `QR_SIZE` | video_generate.py | 41 | 二维码矩阵尺寸 |
+| `scale` | video_generate.py | 15 | 单格像素放大倍数 |
+| `fps` | video_generate.py | 10 | 视频帧率 |
+| `PAYLOAD_LEN` | frame_design.py | 1264 | 每帧数据载荷位数 |
+| `target_size` | perspective_transform.py | (675, 675) | 透视变换目标尺寸 |
+| `brightness_threshold` | video_decode.py | 127 | 黑白判定阈值 |
 
 ---
 
 ## 🐛 常见问题
 
-### Q: 运行 `encode.py` 提示 "input file not found"？
-**A**: 确保输入文件存在且路径正确。可用以下命令创建测试文件：
+### Q: 运行 `video_generate.py` 提示找不到文件？
+**A**: 脚本会自动创建测试文件。如需使用自己的文件，请确保 `input.bin` 存在于 `src` 目录。
+
+### Q: 解码准确率不高？
+**A**: 可能原因包括：
+- 视频压缩导致的图像失真（建议使用较低压缩率）
+- 透视变换精度不足（确保定位点检测准确）
+- 采样位置偏移（检查 `unit = 674 / 45` 计算）
+
+### Q: 如何测试4点定位功能？
+**A**: 使用测试脚本：
 ```bash
-head -c 1024 /dev/urandom > in.bin
+python test_four_anchors.py
 ```
 
-### Q: ffmpeg 报错？
-**A**: 检查 ffmpeg 是否安装和在 PATH 中：
-```bash
-which ffmpeg
-ffmpeg -version
-```
-
-### Q: 解码后的文件与原文件不一致？
-**A**: 这是正常的。原因可能包括：
-- 视频编码/解码过程中的有损压缩或量化
-- 帧提取时的颜色空间转换误差
-- 亮度阈值设定不够精确
-
-建议在重要应用中使用纠错码或增加冗余。
-
-### Q: 如何修改视频参数（分辨率、码率等）？
-**A**: 修改 `encode.py` 中的参数或 ffmpeg 命令行。例如：
-```python
-# 修改分辨率
-width = 800
-height = 800
-
-# 或修改编码参数
-cmd = f"ffmpeg -y -framerate {fps} -i frames/frame_%05d.png -c:v libx264 -crf 18 {output_video}"
-```
+### Q: 如何修改二维码尺寸？
+**A**: 需要同步修改：
+- `frame_design.py` 中的 `PAYLOAD_LEN`（数据容量）
+- `video_generate.py` 中的 `QR_SIZE`
+- `video_decode.py` 中的采样逻辑
 
 ---
-
-
 
 ## 📚 技术栈
 
 - **Python 3.9+**: 脚本语言
-- **OpenCV (cv2)**: 图像处理
-- **NumPy**: 数值计算
-- **FFmpeg**: 视频编码/解码
-- **subprocess**: 调用外部命令
+- **OpenCV (cv2)**: 图像处理与视频编解码
+- **NumPy**: 数值计算与矩阵操作
+- **CRC-16**: 帧数据校验
 
 ---
 
@@ -208,7 +210,61 @@ cmd = f"ffmpeg -y -framerate {fps} -i frames/frame_%05d.png -c:v libx264 -crf 18
 
 ---
 
+## 📝 开发日志
+
+### 2026年3月19日 - 今晚的实现
+
+今晚我们从零开始构建了一个完整的可见光通信编解码系统，实现了以下核心功能：
+
+**1. 帧结构设计 (`frame_design.py`)**
+- 设计了 1312 bits 的帧结构，包含 HEADER(8) + FRAME_ID(16) + DATA_LEN(8) + PAYLOAD(1264) + CRC(16)
+- 实现了 `build_frame()` 函数，支持自动填充和 CRC 校验计算
+- 实现了 `parse_frame()` 函数，支持帧解析、CRC 验证、根据 DATA_LEN 裁剪有效数据
+- 解决了末尾填充 0 无法区分的问题
+
+**2. 数据编码模块 (`encode.py`)**
+- 实现了 `bytes_to_bits()` 高效字节转比特串
+- 实现了 `split_into_payloads()` 切分数据块
+- 实现了 `generate_frames()` 生成带序号的帧列表
+- 添加了文件信息统计功能
+
+**3. 视频生成模块 (`video_generate.py`)**
+- 设计了 41×41 二维码矩阵结构
+- 实现了 7×7 回字形定位符绘制（左上、右上、左下三个角）
+- 实现了右下角 5×5 方向标识块
+- 实现了数据区域随机噪点背景填充
+- 使用 OpenCV VideoWriter 生成 MP4 视频
+- 添加了 2 格宽度的白色保护带（Quiet Zone）
+
+**4. 透视变换模块 (`perspective_transform.py`)**
+- 实现了 `find_four_anchors()` 4点定位检测算法
+- 使用自适应阈值和轮廓分析识别回字形定位符
+- 实现了几何排序确定四个角点位置
+- 实现了 `correct_frame()` 透视变换纠正
+- 添加了帧去重逻辑（基于图像哈希）
+
+**5. 视频解码模块 (`video_decode.py`)**
+- 实现了视频帧提取和去重
+- 集成透视变换纠正
+- 实现了 OTSU 自动阈值二值化
+- 实现了 41×41 矩阵精确采样
+- 实现了滑窗 HEADER 搜索（应对边缘偏移）
+- 实现了帧排序、数据拼接、文件恢复
+- 添加了准确率统计功能
+
+**6. 测试工具 (`test_four_anchors.py`)**
+- 创建了 4点定位检测的独立测试脚本
+- 支持在图像上标记定位点位置
+
+**当前系统特点：**
+- 使用 4点透视变换比传统 3点仿射变换更精确
+- 帧序号机制确保数据顺序正确
+- CRC 校验保证数据完整性
+- DATA_LEN 字段解决末尾填充问题
+- 随机噪点背景增强视觉特征
+
+---
 
 *WebLab 项目*
 
-**最后修改**: 2026 年 3 月 8 日
+**最后修改**: 2026 年 3 月 19 日
