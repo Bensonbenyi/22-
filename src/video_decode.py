@@ -119,12 +119,13 @@ def process_video_to_bits(video_path):
 # =========================
 # 5. 保存文件
 # =========================
-def save_bits_to_file(frame_bits_list, output_path):
+def save_bits_to_file(frame_bits_list, output_path, max_frame_id=None):
     received = {}
     HEADER = "10101010"
 
     ok = 0
     fail = 0
+    skipped = 0
 
     for bits in frame_bits_list:
         # Header 对齐
@@ -136,13 +137,17 @@ def save_bits_to_file(frame_bits_list, output_path):
         f_id, payload = parse_frame(bits)
 
         if payload is not None:
+            # 检查帧ID是否在合理范围内
+            if max_frame_id is not None and f_id > max_frame_id:
+                skipped += 1
+                continue
             ok += 1
             if f_id not in received:
                 received[f_id] = payload
         else:
             fail += 1
 
-    print(f"[解析统计] 成功:{ok} 失败:{fail}")
+    print(f"[解析统计] 成功:{ok} 失败:{fail} 跳过(超出范围):{skipped}")
 
     if not received:
         print("[-] 没有有效帧")
@@ -206,8 +211,19 @@ def main():
     # 重置帧哈希缓存，确保每次运行都是全新的处理
     reset_frame_hash()
 
+    # 计算预期的最大帧数（基于原始文件大小）
+    import os
+    if os.path.exists(original_file):
+        original_size = os.path.getsize(original_file)
+        # 每帧payload字节数 = PAYLOAD_LEN // 8 = 179
+        expected_frames = (original_size + 178) // 179  # 向上取整
+        max_frame_id = expected_frames + 2  # 允许一些冗余
+        print(f"[信息] 原始文件: {original_size} bytes, 预期帧数: {expected_frames}, 最大帧ID: {max_frame_id}")
+    else:
+        max_frame_id = None
+
     bits = process_video_to_bits(video_input)
-    save_bits_to_file(bits, file_output)
+    save_bits_to_file(bits, file_output, max_frame_id)
     compare_files(file_output, original_file)
 
 

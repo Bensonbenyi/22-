@@ -19,3 +19,6 @@ src/frames_output.txt
 debug_frames
 
 decode_debug
+
+.venv
+.vscode
