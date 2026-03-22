@@ -12,3 +12,10 @@ __pycache__/
 
 *.png
 src/frames_output.txt
+
+*.c
+*.exe
+
+debug_frames
+
+decode_debug

@@ -20,15 +20,8 @@ def read_file(file_path):
         return None
 
 
-# def bytes_to_bits(data_bytes):
-#     """字节转比特串"""
-#     bits = ''
-#     for byte in data_bytes:
-#         bits += format(byte, '08b')
-#     return bits
-# 写法更高效点：
 def bytes_to_bits(data_bytes):
-    """字节转比特串 - 推荐的高性能写法"""
+    """字节转比特串"""
     return "".join(format(byte, '08b') for byte in data_bytes)
 
 
@@ -65,7 +58,7 @@ def generate_frames(file_path):
     # 4. 生成带序号的帧
     frames = []
     for i, chunk in enumerate(payload_chunks):
-        # 【核心修改】：传入 chunk 和 当前帧序号 i
+        # 传入 chunk 和 当前帧序号 i
         frame = build_frame(chunk, i)
         frames.append(frame)
 
@@ -129,7 +122,7 @@ if __name__ == "__main__":
     # 3. 打印第一个帧的结构分析 (用于核对)
     if frames:
         f = frames[0]
-        # HEADER(8) | ID(16) | LEN(8) | PAYLOAD(1264) | CRC(16)
+        # HEADER(8) | ID(16) | LEN(8) | PAYLOAD(1432) | CRC(16)
         print("\n第一帧结构分析:")
         print(f"Header: {f[:8]}")
         print(f"ID bits: {f[8:24]}")
