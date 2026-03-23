@@ -122,13 +122,13 @@ if __name__ == "__main__":
     # 3. 打印第一个帧的结构分析 (用于核对)
     if frames:
         f = frames[0]
-        # HEADER(8) | ID(16) | LEN(8) | PAYLOAD(1432) | CRC(16)
+        # HEADER(8) | ID(16) | LEN(16) | PAYLOAD(8960) | CRC(16)
         print("\n第一帧结构分析:")
         print(f"Header: {f[:8]}")
         print(f"ID bits: {f[8:24]}")
-        print(f"Length bits: {f[24:32]}")
-        print(f"Data Sample (first 16 bits): {f[32:48]}")
+        print(f"Length bits: {f[24:40]}")  # 16 bits for length
+        print(f"Data Sample (first 16 bits): {f[40:56]}")
         print(f"CRC: {f[-16:]}")
-        
+
     # 保存调试文件
     save_frames(frames, "frames_output.txt")
