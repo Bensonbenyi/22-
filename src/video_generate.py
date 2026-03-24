@@ -3,17 +3,21 @@ video_generate.py
 
 功能描述:
     本模块负责将编码后的 01 比特流帧 (Bit-frames) 转化为物理可视的图像信号。
-    它采用 41x41 的自定义二维码矩阵结构，四个角都使用 7x7 '回'字形定位符。
+    适配 1920x1080 分辨率，使用 11x11 大定位点，便于手机拍摄识别。
+    【无白边版本】二维码直接占满整个 1920x1080 画面
 
 核心逻辑:
-    1. 矩阵映射: 将 1480 bits 的帧数据映射到 41x41 的 Numpy 矩阵中。
-    2. 定位符绘制: 在矩阵的四个角绘制 7x7 '回'字形定位符（统一格式）。
-    3. 图像增强: 使用 INTER_NEAREST 插值放大像素，并添加白色保护带 (Quiet Zone)。
-    4. 视频合成: 调用 OpenCV VideoWriter 将图像序列封装为 .mp4 格式。
+    1. 矩阵映射: 将帧数据映射到 128x72 的 Numpy 矩阵中。
+    2. 定位符绘制: 在矩阵的四个角绘制 11x11 大定位符。
+    3. 视频合成: 调用 OpenCV VideoWriter 将图像序列封装为 .mp4 格式。
 
 参数规范:
-    - QR_SIZE: 41 (矩阵规格)
-    - Scale: 15 (单格像素缩放倍化)
+    - QR_WIDTH: 128 (水平矩阵规格)
+    - QR_HEIGHT: 72 (垂直矩阵规格)
+    - CELL_SIZE: 15 (单格像素大小)
+    - FINDER_SIZE: 11 (大定位点，便于检测)
+    - VIDEO_WIDTH: 1920 (视频宽度)
+    - VIDEO_HEIGHT: 1080 (视频高度)
     - FPS: 10-15 (适配手机快门同步)
 """
 import os
@@ -21,39 +25,47 @@ import numpy as np
 import random
 import cv2
 from encode import encode_file
-
-# 根据之前的设计，总格子数为 41x41
-QR_SIZE = 41 
+from frame_design import (
+    QR_WIDTH, QR_HEIGHT, FINDER_SIZE, 
+    VIDEO_WIDTH, VIDEO_HEIGHT, CELL_SIZE, BORDER_CELLS
+)
 
 def frame_to_qr(frame_bits):
     """
-    将 frame_bits 转换为 41x41 矩阵，带定位符
+    将 frame_bits 转换为 128x72 矩阵，带 11x11 大定位符
+    【无白边版本】
     """
-    # 1. 初始化全白矩阵 (0表示白色，1表示黑色，方便后续 np.where 处理)
-    matrix = np.zeros((QR_SIZE, QR_SIZE), dtype=np.uint8)
+    # 1. 初始化全白矩阵 (0表示白色，1表示黑色)
+    matrix = np.zeros((QR_HEIGHT, QR_WIDTH), dtype=np.uint8)
 
-    # 2. 定义绘制定位符的内部函数 (7x7 回字形)
+    # 2. 定义绘制定位符的内部函数 (11x11 大回字形)
     def draw_finder(m, x, y):
-        m[x:x+7, y:y+7] = 1        # 外层黑块
-        m[x+1:x+6, y+1:y+6] = 0    # 中层白块
-        m[x+2:x+5, y+2:y+5] = 1    # 内层黑块
+        # 外层黑框 (11x11)
+        m[x:x+FINDER_SIZE, y:y+FINDER_SIZE] = 1
+        # 中层白框 (9x9)
+        m[x+1:x+FINDER_SIZE-1, y+1:y+FINDER_SIZE-1] = 0
+        # 内层黑框 (7x7)
+        m[x+2:x+FINDER_SIZE-2, y+2:y+FINDER_SIZE-2] = 1
+        # 中心白点 (5x5)
+        m[x+3:x+FINDER_SIZE-3, y+3:y+FINDER_SIZE-3] = 0
+        # 最中心黑点 (3x3)
+        m[x+4:x+FINDER_SIZE-4, y+4:y+FINDER_SIZE-4] = 1
 
-    # 3. 绘制四个角的定位符（统一为相同的7x7回字形）
-    draw_finder(matrix, 0, 0)                  # 左上
-    draw_finder(matrix, 0, QR_SIZE - 7)         # 右上
-    draw_finder(matrix, QR_SIZE - 7, 0)         # 左下
-    draw_finder(matrix, QR_SIZE - 7, QR_SIZE - 7)  # 右下（改为与其他三个角相同）
+    # 3. 绘制四个角的定位符（11x11 大定位符）
+    draw_finder(matrix, 0, 0)                                    # 左上
+    draw_finder(matrix, 0, QR_WIDTH - FINDER_SIZE)               # 右上
+    draw_finder(matrix, QR_HEIGHT - FINDER_SIZE, 0)              # 左下
+    draw_finder(matrix, QR_HEIGHT - FINDER_SIZE, QR_WIDTH - FINDER_SIZE)  # 右下
 
-    # 5. 提取可填充数据的区域 (遮罩 Mask) 
-    # 创建一个和 matrix 一样大的布尔矩阵，标记哪里可以填数据
-    data_mask = np.ones((QR_SIZE, QR_SIZE), dtype=bool)
-    # 扣除四个角的 7x7 定位符区域
-    data_mask[0:7, 0:7] = False
-    data_mask[0:7, QR_SIZE-7:QR_SIZE] = False
-    data_mask[QR_SIZE-7:QR_SIZE, 0:7] = False
-    data_mask[QR_SIZE-7:QR_SIZE, QR_SIZE-7:QR_SIZE] = False
+    # 4. 提取可填充数据的区域 (遮罩 Mask) 
+    data_mask = np.ones((QR_HEIGHT, QR_WIDTH), dtype=bool)
+    # 扣除四个角的 11x11 定位符区域
+    data_mask[0:FINDER_SIZE, 0:FINDER_SIZE] = False
+    data_mask[0:FINDER_SIZE, QR_WIDTH-FINDER_SIZE:QR_WIDTH] = False
+    data_mask[QR_HEIGHT-FINDER_SIZE:QR_HEIGHT, 0:FINDER_SIZE] = False
+    data_mask[QR_HEIGHT-FINDER_SIZE:QR_HEIGHT, QR_WIDTH-FINDER_SIZE:QR_WIDTH] = False
 
-    # 6. 填充 frame_bits 到数据区
+    # 5. 填充 frame_bits 到数据区
     bits = [int(b) for b in frame_bits]
     
     # 找到所有为 True 的索引坐标
@@ -62,8 +74,7 @@ def frame_to_qr(frame_bits):
     # 如果比特数不够，补0；如果太多，截断
     max_data_len = len(available_coords)
 
-    # 重点：先用随机数铺满整个背景，再把真实数据覆盖上去
-    # 这样哪怕数据只有一半，剩下的一半也是随机噪点
+    # 先用随机数铺满整个背景，再把真实数据覆盖上去
     full_random_bits = [random.randint(0, 1) for _ in range(max_data_len)]
     data_to_fill_len = min(len(bits), max_data_len)
 
@@ -76,47 +87,41 @@ def frame_to_qr(frame_bits):
 
     return matrix
 
-def generate_frame_image(frame_bits, scale=15):
+def generate_frame_image(frame_bits, cell_size=CELL_SIZE):
     """
-    根据 frame 生成二维码图片，增加白色边框（Quiet Zone）
+    根据 frame 生成二维码图片，适配 1920x1080 分辨率
+    【无白边版本】二维码直接占满整个画面
     """
     matrix = frame_to_qr(frame_bits)
 
     # 1 -> 黑色 (0), 0 -> 白色 (255)
     img = np.where(matrix == 1, 0, 255).astype(np.uint8)
 
-    # 放大：使用 INTER_NEAREST 保持像素方块清晰
+    # 放大到指定像素大小（直接就是 1920x1080，无白边）
     img_resized = cv2.resize(
         img,
-        (QR_SIZE * scale, QR_SIZE * scale),
+        (VIDEO_WIDTH, VIDEO_HEIGHT),  # 直接输出 1920x1080
         interpolation=cv2.INTER_NEAREST
     )
     
-    # 增加白色边框（Quiet Zone），方便手机定位，四周增加 2 个格子的宽度
-    border = 2 * scale
-    img_with_border = cv2.copyMakeBorder(
-        img_resized, 
-        border, border, border, border, 
-        cv2.BORDER_CONSTANT, 
-        value=255
-    )
-
-    return img_with_border
+    # 【无白边】不再添加边框
+    return img_resized
 
 def generate_video(frames, output_path="transmitter_video.mp4", fps=10):
     """
-    将多帧二维码生成视频
+    将多帧二维码生成视频，分辨率 1920x1080
+    【无白边版本】
     """
     images = []
     for frame in frames:
         img = generate_frame_image(frame)
         images.append(img)
 
-    # 修正：因为增加了边框，需要重新获取宽高
+    # 获取宽高（应该是 1920x1080）
     height, width = images[0].shape
 
-    # 注意：cv2.VideoWriter 默认需要 (width, height)
-    # 并且如果保存灰度图，最后一个参数 isColor 必须设为 False
+    # cv2.VideoWriter 需要 (width, height)
+    # 保存灰度图，isColor 设为 False
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     video = cv2.VideoWriter(output_path, fourcc, fps, (width, height), False)
 
@@ -126,7 +131,7 @@ def generate_video(frames, output_path="transmitter_video.mp4", fps=10):
         video.write(img)
 
     video.release()
-    print(f"视频生成完成: {output_path}，当前分辨率: {width}x{height}")
+    print(f"视频生成完成: {output_path}，分辨率: {width}x{height}")
 
 if __name__ == "__main__":
     # 1. 配置参数
@@ -135,7 +140,7 @@ if __name__ == "__main__":
     TRANSMIT_FPS = 10 
 
     print("="*50)
-    print("可见光通信 - 发送端启动")
+    print("可见光通信 - 发送端启动 (1920x1080, 无白边)")
     print("="*50)
 
     # 2. 检查并准备输入文件
@@ -160,4 +165,8 @@ if __name__ == "__main__":
         print(f"发送视频生成成功！")
         print(f"文件路径: {os.path.abspath(OUTPUT_VIDEO_FILE)}")
         print(f"传输帧数: {len(data_frames)} 帧")
+        print(f"分辨率: {VIDEO_WIDTH}x{VIDEO_HEIGHT}")
+        print(f"矩阵大小: {QR_WIDTH}x{QR_HEIGHT}")
+        print(f"定位点大小: {FINDER_SIZE}x{FINDER_SIZE}")
+        print(f"白边: 无")
         print("="*50)
