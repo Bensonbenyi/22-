@@ -1,0 +1,14 @@
+# 编码 - 生成完整视频
+python cli.py encode input.bin output.mp4
+
+# 编码 - 只生成前 1000ms 的视频
+python cli.py encode input.bin output.mp4 1000
+
+# 解码 - 比较全部数据
+python cli.py decode transmitter_video.mp4 out.bin vout.bin
+
+# 解码 - 只比较前 1000ms 对应的数据量
+python cli.py decode transmitter_video.mp4 out.bin vout.bin 1000
+
+# 查有效数据等测试要求数据
+python test_performance.py input.bin out.bin transmitter_video.mp4 1000

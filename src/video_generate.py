@@ -107,7 +107,7 @@ def generate_frame_image(frame_bits, cell_size=CELL_SIZE):
     # 【无白边】不再添加边框
     return img_resized
 
-def generate_video(frames, output_path="transmitter_video.mp4", fps=10):
+def generate_video(frames, output_path="transmitter_video.mp4", fps=15):
     """
     将多帧二维码生成视频，分辨率 1920x1080
     【无白边版本】
@@ -126,8 +126,7 @@ def generate_video(frames, output_path="transmitter_video.mp4", fps=10):
     video = cv2.VideoWriter(output_path, fourcc, fps, (width, height), False)
 
     for img in images:
-        # 重复写入同一帧 2 次（增加视频冗余度，方便手机捕捉）
-        video.write(img)
+        # 写入一帧
         video.write(img)
 
     video.release()
@@ -137,7 +136,7 @@ if __name__ == "__main__":
     # 1. 配置参数
     INPUT_BIN_FILE = "input.bin" 
     OUTPUT_VIDEO_FILE = "transmitter_video.mp4"
-    TRANSMIT_FPS = 10 
+    TRANSMIT_FPS = 15 
 
     print("="*50)
     print("可见光通信 - 发送端启动 (1920x1080, 无白边)")
@@ -160,6 +159,11 @@ if __name__ == "__main__":
         # 4. 调用本文件中的函数生成视频
         print(f"[*] 正在将 {len(data_frames)} 个数据帧转换为可视信号...")
         generate_video(data_frames, OUTPUT_VIDEO_FILE, fps=TRANSMIT_FPS)
+        
+        # 计算实际视频信息
+        frame_repeat = 2  # 每帧重复次数
+        video_frames = len(data_frames) * frame_repeat  # 实际视频帧数
+        duration_sec = video_frames / TRANSMIT_FPS
         
         print("\n" + "="*50)
         print(f"发送视频生成成功！")

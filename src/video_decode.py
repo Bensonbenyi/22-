@@ -260,7 +260,16 @@ def save_bits_to_file(frame_bits_list, output_path, max_frame_id=None):
 # =========================
 # 6. 文件对比
 # =========================
-def compare_files(decoded_file, original_file, output_file="vout.bin"):
+def compare_files(decoded_file, original_file, output_file="vout.bin", limit_bytes=None):
+    """
+    对比文件
+    
+    参数:
+        decoded_file: 解码后的文件
+        original_file: 原始文件
+        output_file: 对比结果输出文件
+        limit_bytes: 只比较前 limit_bytes 字节, None 表示比较全部
+    """
     if not os.path.exists(decoded_file) or not os.path.exists(original_file):
         print("[-] 缺少文件")
         return False
@@ -268,7 +277,10 @@ def compare_files(decoded_file, original_file, output_file="vout.bin"):
     with open(decoded_file, "rb") as f:
         dec = f.read()
     with open(original_file, "rb") as f:
-        ori = f.read()
+        if limit_bytes:
+            ori = f.read(limit_bytes)  # 只读取前 limit_bytes
+        else:
+            ori = f.read()
 
     max_len = max(len(dec), len(ori))
     res = []
@@ -285,7 +297,13 @@ def compare_files(decoded_file, original_file, output_file="vout.bin"):
     correct = sum(bin(b).count("1") for b in res)
     total = max_len * 8
 
-    print(f"[+] 准确率: {correct / total * 100:.2f}%")
+    if limit_bytes:
+        print(f"[+] 对比完成！比较字节数: {max_len}")
+    accuracy = correct / total * 100
+    if accuracy >= 99.995:
+        print(f"[+] 准确率: {accuracy:.4f}% ({total - correct} 位错误 / {total} 位)")
+    else:
+        print(f"[+] 准确率: {accuracy:.2f}%")
     return True
 
 
