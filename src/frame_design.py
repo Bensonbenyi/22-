@@ -20,6 +20,13 @@ CRC_LEN = 16
 
 # 总帧长：8 + 16 + 8 + 1432 + 16 = 1480 bits
 FRAME_LEN = HEADER_LEN + ID_LEN + LEN_FIELD_BIT + PAYLOAD_LEN + CRC_LEN
+MAX_FRAME_ID = (1 << ID_LEN) - 1
+MAX_PAYLOAD_BYTES = PAYLOAD_LEN // 8
+
+
+def _is_binary_string(value: str) -> bool:
+    """检查输入是否仅由 0/1 组成。"""
+    return set(value) <= {"0", "1"}
 
 def compute_crc(data_string: str) -> str:
     """计算从 FRAME_ID 到 PAYLOAD 的校验和"""
@@ -31,9 +38,18 @@ def build_frame(payload_bits: str, frame_id: int) -> str:
     """
     构建帧：解决填充0导致无法区分的问题
     """
+    if not _is_binary_string(payload_bits):
+        raise ValueError("payload_bits 必须只包含 0 和 1")
+    if len(payload_bits) > PAYLOAD_LEN:
+        raise ValueError(f"payload_bits 不能超过 {PAYLOAD_LEN} bits")
+    if not 0 <= frame_id <= MAX_FRAME_ID:
+        raise ValueError(f"frame_id 必须在 0 到 {MAX_FRAME_ID} 之间")
+
     # 计算当前这帧实际包含的字节数
     actual_bytes_count = len(payload_bits) // 8
-    
+    if actual_bytes_count > MAX_PAYLOAD_BYTES:
+        raise ValueError(f"payload_bits 不能超过 {MAX_PAYLOAD_BYTES} 字节")
+
     # 如果不足 PAYLOAD_LEN，进行补齐
     if len(payload_bits) < PAYLOAD_LEN:
         payload_bits = payload_bits.ljust(PAYLOAD_LEN, "0")
@@ -53,6 +69,8 @@ def parse_frame(frame_bits: str):
     解析帧并利用 DATA_LEN 裁剪掉末尾填充的0
     """
     if len(frame_bits) != FRAME_LEN:
+        return None, None
+    if not _is_binary_string(frame_bits):
         return None, None
 
     header = frame_bits[:HEADER_LEN]
@@ -76,6 +94,8 @@ def parse_frame(frame_bits: str):
         return None, None
 
     # 根据 data_len_in_bytes 只截取有效数据
+    if data_len_in_bytes > MAX_PAYLOAD_BYTES:
+        return None, None
     valid_bit_count = data_len_in_bytes * 8
     real_payload = payload[:valid_bit_count]
 
@@ -85,6 +105,9 @@ def split_bitstream(bitstream: str):
     """
     将长比特流分割成帧
     """
+    if not _is_binary_string(bitstream):
+        raise ValueError("bitstream 必须只包含 0 和 1")
+
     frames = []
     frame_counter = 0
 
@@ -98,7 +121,7 @@ def split_bitstream(bitstream: str):
     return frames
 
 def frames_to_bitstream(frames):
-    """  
+    """
     从所有帧中提取并排序拼接有效数据
     """
     payload_dict = {}
@@ -110,6 +133,6 @@ def frames_to_bitstream(frames):
 
     # 根据 Frame ID 排序，确保文件内容顺序正确
     sorted_ids = sorted(payload_dict.keys())
-    full_bitstream = "".join([payload_dict[i] for i in sorted_ids])
+    full_bitstream = "".join(payload_dict[i] for i in sorted_ids)
 
     return full_bitstream
