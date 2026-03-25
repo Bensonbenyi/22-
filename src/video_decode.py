@@ -1,15 +1,60 @@
 """
-video_decode.py - 视频解码与数据恢复
+video_decode.py - 视频解码与数据恢复 (1920x1080 适配版，128x72矩阵，11x11定位点，无白边)
 """
 
 import cv2
 import numpy as np
 import os
-from frame_design import parse_frame, PAYLOAD_LEN
+from frame_design import parse_frame, PAYLOAD_LEN, QR_WIDTH, QR_HEIGHT, FINDER_SIZE, FRAME_LEN
 from perspective_transform import correct_frame, reset_frame_hash
 
-QR_SIZE = 41
-FRAME_BITS = 1480  # 更新为新的帧长度：8 + 16 + 8 + 1432 + 16 = 1480
+# 视频和矩阵配置
+VIDEO_WIDTH = 1920
+VIDEO_HEIGHT = 1080
+CELL_SIZE = 15  # 每个矩阵格子的像素大小
+BORDER_CELLS = 0  # 无白边
+
+# 透视变换输出大小（无白边，直接就是 1920x1080）
+OUTPUT_WIDTH = VIDEO_WIDTH   # 1920
+OUTPUT_HEIGHT = VIDEO_HEIGHT  # 1080
+
+FRAME_BITS = FRAME_LEN  # 从 frame_design 导入
+
+
+def get_matrix_from_frame_direct(frame):
+    """
+    直接从原始帧采样矩阵（不进行透视变换）
+    适用于视频帧已经是正视图的情况
+    【无白边版本】
+    """
+    # 转换为灰度图
+    if len(frame.shape) == 3:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = frame
+
+    # 二值化
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # 计算每格像素大小
+    unit_x = gray.shape[1] / QR_WIDTH   # 1920 / 128 = 15
+    unit_y = gray.shape[0] / QR_HEIGHT  # 1080 / 72 = 15
+
+    matrix = np.zeros((QR_HEIGHT, QR_WIDTH), dtype=int)
+
+    for i in range(QR_HEIGHT):
+        for j in range(QR_WIDTH):
+            # 【无白边】直接从 (0, 0) 开始采样
+            cy = int((i + 0.5) * unit_y)
+            cx = int((j + 0.5) * unit_x)
+
+            # 5x5 区域采样
+            patch = binary[max(0,cy-2):cy+3, max(0,cx-2):cx+3]
+
+            # 均值 < 127 代表黑色，存为 1
+            matrix[i, j] = 1 if np.mean(patch) < 127 else 0
+
+    return matrix
 
 
 # =========================
@@ -18,67 +63,118 @@ FRAME_BITS = 1480  # 更新为新的帧长度：8 + 16 + 8 + 1432 + 16 = 1480
 def get_corrected_qr(frame):
     # 使用 perspective_transform.py 中的 correct_frame 进行透视变换
     result = correct_frame(frame)
-    
+
     if result is None:
         return None
-    
+
     if isinstance(result, str) and result == "SKIP":
         return "SKIP"
-    
+
     # 转换为灰度图
     gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-    
+
     return gray
 
+
 # =========================
-# 2. 采样（修正：只采样，不画图）
+# 2. 采样（适配 128x72 矩阵，无白边）
 # =========================
 def get_matrix_from_binary(qr_img):
-    # 先做一次全局二值化，提高 patch 均值判断的准确度
+    """
+    从透视变换后的图像采样 128x72 矩阵
+    图像大小应该是 1920x1080（无白边）
+    """
+    # 先做一次全局二值化
     _, binary = cv2.threshold(qr_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    
-    # 透视变换后的图片是 674x674，45x45 格子
-    # 674 / 45 ≈ 15 像素/格
-    unit = 674 / 45  # 每格约 15 像素
-    matrix = np.zeros((QR_SIZE, QR_SIZE), dtype=int)
 
-    for i in range(QR_SIZE):
-        for j in range(QR_SIZE):
-            # 计算采样中心点：跳过 2 格白边，采样点在 (i+0.5) 格
-            cy = int((2 + i + 0.5) * unit)
-            cx = int((2 + j + 0.5) * unit)
-            
-            # 5x5 区域采样（比 3x3 更稳，不容易被压缩噪点干扰）
-            patch = binary[max(0,cy-2):cy+3, max(0,cx-2):cx+3]
-            
-            # 核心：均值 < 127 代表黑色，存为 1
-            matrix[i, j] = 1 if np.mean(patch) < 127 else 0
-            
+    h, w = binary.shape
+
+    # 计算每格的像素大小
+    # 总宽度 = 1920，格子数 = 128
+    unit_x = w / QR_WIDTH   # 1920 / 128 = 15
+    unit_y = h / QR_HEIGHT  # 1080 / 72 = 15
+
+    matrix = np.zeros((QR_HEIGHT, QR_WIDTH), dtype=int)
+
+    for i in range(QR_HEIGHT):
+        for j in range(QR_WIDTH):
+            # 【无白边】直接计算采样点
+            cy = int((i + 0.5) * unit_y)
+            cx = int((j + 0.5) * unit_x)
+
+            # 确保不越界
+            if cy < 0 or cy >= h or cx < 0 or cx >= w:
+                matrix[i, j] = 0
+                continue
+
+            # 5x5 区域采样
+            patch = binary[max(0,cy-2):min(h,cy+3), max(0,cx-2):min(w,cx+3)]
+
+            # 均值 < 127 代表黑色，存为 1
+            if patch.size > 0:
+                matrix[i, j] = 1 if np.mean(patch) < 127 else 0
+            else:
+                matrix[i, j] = 0
+
     return matrix
 
+
 # =========================
-# 3. 提取比特（修正：严格对齐发送端 Mask）
+# 3. 提取比特（适配 128x72 矩阵）
 # =========================
 def matrix_to_bits(matrix):
-    # 建立一个"数据掩码"
-    # 默认全部是数据 (True)
-    is_data = np.ones((QR_SIZE, QR_SIZE), dtype=bool)
+    """
+    从 128x72 矩阵提取数据比特
+    扣除四个角的 11x11 定位符区域
+    """
+    # 建立数据掩码
+    is_data = np.ones((QR_HEIGHT, QR_WIDTH), dtype=bool)
 
-    # 剔除四个角的 7x7 定位符区域 (False)
-    is_data[0:7, 0:7] = False
-    is_data[0:7, QR_SIZE-7:QR_SIZE] = False
-    is_data[QR_SIZE-7:QR_SIZE, 0:7] = False
-    is_data[QR_SIZE-7:QR_SIZE, QR_SIZE-7:QR_SIZE] = False
+    # 剔除四个角的 11x11 定位符区域
+    is_data[0:FINDER_SIZE, 0:FINDER_SIZE] = False
+    is_data[0:FINDER_SIZE, QR_WIDTH-FINDER_SIZE:QR_WIDTH] = False
+    is_data[QR_HEIGHT-FINDER_SIZE:QR_HEIGHT, 0:FINDER_SIZE] = False
+    is_data[QR_HEIGHT-FINDER_SIZE:QR_HEIGHT, QR_WIDTH-FINDER_SIZE:QR_WIDTH] = False
 
     bits = []
     # 按照行优先顺序提取所有 True (数据) 区域
-    for i in range(QR_SIZE):
-        for j in range(QR_SIZE):
+    for i in range(QR_HEIGHT):
+        for j in range(QR_WIDTH):
             if is_data[i, j]:
                 bits.append(str(matrix[i, j]))
-    
-    # 拼接成字符串并截断到 header+payload 的固定长度
+
+    # 拼接成字符串并截断到帧长度
     return "".join(bits)[:FRAME_BITS]
+
+
+def try_decode_frame(frame):
+    """
+    尝试解码单帧，先尝试透视变换，如果失败则直接采样
+    """
+    HEADER = "10101010"
+
+    # 方法1：使用透视变换
+    qr = get_corrected_qr(frame)
+    if qr is not None and not isinstance(qr, str):
+        matrix = get_matrix_from_binary(qr)
+        bits = matrix_to_bits(matrix)
+        if bits.startswith(HEADER):
+            return bits
+
+    # 方法2：直接采样（适用于正视图视频）
+    matrix = get_matrix_from_frame_direct(frame)
+    bits = matrix_to_bits(matrix)
+    if bits.startswith(HEADER):
+        return bits
+
+    # 尝试对齐 Header
+    idx = bits.find(HEADER)
+    if 0 <= idx < 20:
+        bits = bits[idx:].ljust(FRAME_BITS, '0')
+        return bits
+
+    return bits  # 返回原始比特，可能后续能解析
+
 
 # =========================
 # 4. 视频处理
@@ -97,18 +193,11 @@ def process_video_to_bits(video_path):
 
         frame_count += 1
 
-        qr = get_corrected_qr(frame)
-        if qr is None:
-            continue
-        
-        if isinstance(qr, str) and qr == "SKIP":
-            continue
+        bits = try_decode_frame(frame)
 
-        matrix = get_matrix_from_binary(qr)
-        bits = matrix_to_bits(matrix)
-
-        all_bits.append(bits)
-        success += 1
+        if bits:
+            all_bits.append(bits)
+            success += 1
 
     cap.release()
 
@@ -169,7 +258,7 @@ def save_bits_to_file(frame_bits_list, output_path, max_frame_id=None):
 
 
 # =========================
-# 6. 文件对比（不动）
+# 6. 文件对比
 # =========================
 def compare_files(decoded_file, original_file, output_file="vout.bin"):
     if not os.path.exists(decoded_file) or not os.path.exists(original_file):
@@ -215,8 +304,9 @@ def main():
     import os
     if os.path.exists(original_file):
         original_size = os.path.getsize(original_file)
-        # 每帧payload字节数 = PAYLOAD_LEN // 8 = 179
-        expected_frames = (original_size + 178) // 179  # 向上取整
+        # 每帧payload字节数 = PAYLOAD_LEN // 8
+        payload_bytes = PAYLOAD_LEN // 8
+        expected_frames = (original_size + payload_bytes - 1) // payload_bytes  # 向上取整
         max_frame_id = expected_frames + 2  # 允许一些冗余
         print(f"[信息] 原始文件: {original_size} bytes, 预期帧数: {expected_frames}, 最大帧ID: {max_frame_id}")
     else:
