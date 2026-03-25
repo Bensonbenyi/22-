@@ -1,9 +1,44 @@
 import cv2
 import numpy as np
+from frame_design import QR_WIDTH, QR_HEIGHT, FINDER_SIZE
 
-# 目标大小，根据需要调整
-# 674x674 可以完整保留白边和二维码内容
-target_size = (674, 674)
+# 视频和矩阵配置
+VIDEO_WIDTH = 1920
+VIDEO_HEIGHT = 1080
+CELL_SIZE = 15  # 每个矩阵格子的像素大小
+BORDER_CELLS = 0  # 无白边
+
+# 透视变换输出大小（无白边，直接就是 1920x1080）
+# 二维码实际大小：128x72 格子，每格15像素 = 1920x1080
+target_size = (VIDEO_WIDTH, VIDEO_HEIGHT)  # (1920, 1080)
+
+# 计算定位点在输出图像中的位置
+# 【无白边】目标点应该让定位点外边缘对齐图像边缘，而不是中心
+
+# 定位点从 (0,0) 开始，大小 11x11 = 165x165 像素
+# 定位点中心在 (5,5) 格 = (75,75) 像素
+# 为了让整个二维码占满 1920x1080，定位点的外边缘应该对齐图像边缘
+
+# 左上定位点：外边缘从 (0,0) 开始，中心在 (75,75)
+# 如果中心映射到 (75,75)，那么外边缘 (0,0) 会被映射到 (0,0) ✓
+# 但这样定位点只占 (0,0) 到 (150,150)，不是从 (0,0) 到 (165,165)
+
+# 正确的计算：
+# 检测到的定位点中心 -> 映射到定位点中心应该的位置
+# 左上定位点中心应该在 (75, 75)
+# 右上定位点中心应该在 (1920-75, 75) = (1845, 75)
+# 左下定位点中心应该在 (75, 1080-75) = (75, 1005)
+# 右下定位点中心应该在 (1920-75, 1080-75) = (1845, 1005)
+FINDER_CENTER_OFFSET = (FINDER_SIZE - 1) / 2 * CELL_SIZE  # 75
+
+# 目标点：定位点中心在输出图像中的位置
+# 由于透视变换会放大图像，导致边缘格子只有一半
+# 所以将目标点向内收缩 7.5 像素（半个格子），让边缘完整显示
+SHRINK_PX = 7.5  # 半个格子
+DST_TOP_LEFT = (FINDER_CENTER_OFFSET + SHRINK_PX, FINDER_CENTER_OFFSET + SHRINK_PX)  # (82.5, 82.5)
+DST_TOP_RIGHT = (VIDEO_WIDTH - FINDER_CENTER_OFFSET - SHRINK_PX, FINDER_CENTER_OFFSET + SHRINK_PX)  # (1837.5, 82.5)
+DST_BOTTOM_LEFT = (FINDER_CENTER_OFFSET + SHRINK_PX, VIDEO_HEIGHT - FINDER_CENTER_OFFSET - SHRINK_PX)  # (82.5, 997.5)
+DST_BOTTOM_RIGHT = (VIDEO_WIDTH - FINDER_CENTER_OFFSET - SHRINK_PX, VIDEO_HEIGHT - FINDER_CENTER_OFFSET - SHRINK_PX)  # (1837.5, 997.5)
 
 # 上一帧的哈希值，用于去重
 last_frame_hash = None
@@ -19,6 +54,8 @@ def find_anchor_centers(img):
     """
     寻找二维码的四个定位点中心
     使用改进的二值化方法应对反光问题
+    适配 1920x1080 分辨率和更大的二维码（11x11定位点）
+    【无白边版本】
     """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
@@ -52,8 +89,8 @@ def find_anchor_centers(img):
     for i, cnt in enumerate(contours):
         area = cv2.contourArea(cnt)
         
-        # 过滤掉太小的轮廓
-        if area < 100:
+        # 调整面积范围：11x11 定位符在 1920x1080 画面中更大
+        if area < 1000 or area > 50000:
             continue
         
         # --- 过滤逻辑 1：外接矩形比例 ---
@@ -75,7 +112,18 @@ def find_anchor_centers(img):
             if M["m00"] != 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
-                candidates.append([cx, cy])
+                candidates.append([cx, cy, area])  # 同时记录面积
+    
+    # 如果候选点超过4个，选择面积最接近的4个（11x11定位符面积应该相近）
+    if len(candidates) > 4:
+        # 计算平均面积
+        avg_area = np.mean([c[2] for c in candidates])
+        # 按与平均面积的差距排序
+        candidates.sort(key=lambda x: abs(x[2] - avg_area))
+        candidates = candidates[:4]
+    
+    # 去掉面积信息，只保留坐标
+    candidates = [[c[0], c[1]] for c in candidates]
 
     # 需要至少 4 个点（现在四个角都是定位符）
     if len(candidates) < 4:
@@ -88,11 +136,6 @@ def find_anchor_centers(img):
     center = np.mean(pts, axis=0)
     
     # 根据相对于中心的位置来排序
-    # 左上: x < center_x, y < center_y
-    # 右上: x > center_x, y < center_y
-    # 左下: x < center_x, y > center_y
-    # 右下: x > center_x, y > center_y
-    
     top_left_candidates = []
     top_right_candidates = []
     bottom_left_candidates = []
@@ -125,20 +168,17 @@ def find_anchor_centers(img):
         return candidates_list[np.argmin(distances)]
     
     # 计算期望的中心偏移（用于选择正确的点）
-    # 假设二维码大致是正方形，计算平均边长
     all_dists = []
     for i in range(len(pts)):
         for j in range(i + 1, len(pts)):
             dist = np.sqrt(np.sum((pts[i] - pts[j])**2))
             all_dists.append(dist)
     all_dists.sort()
-    # 取中间两个距离作为边长估计
     if len(all_dists) >= 4:
         avg_side = (all_dists[1] + all_dists[2]) / 2
     else:
         avg_side = np.mean(all_dists) if all_dists else 100
     
-    # 期望的角点位置（相对于中心）
     offset = avg_side / 2
     expected_tl = center + np.array([-offset, -offset])
     expected_tr = center + np.array([offset, -offset])
@@ -153,14 +193,13 @@ def find_anchor_centers(img):
     if top_left is None or top_right is None or bottom_left is None or bottom_right is None:
         return None
     
-    # 返回 4 个点：左上、右上、左下、右下
     return np.float32([top_left, top_right, bottom_left, bottom_right])
 
 
 def correct_frame(frame):
     """
     对帧进行透视变换，纠正二维码的角度和位置
-    使用 4 点透视变换（参考 Visual-Net 的思想）
+    使用 4 点透视变换，输出 1920x1080（无白边）
     """
     global last_frame_hash
     
@@ -170,7 +209,6 @@ def correct_frame(frame):
     curr_hash = resized.mean()
     
     if last_frame_hash is not None:
-        # 原片极其稳定，阈值设为 0.1 即可过滤掉完全重复的帧
         if abs(curr_hash - last_frame_hash) < 0.1:
             return "SKIP"
     last_frame_hash = curr_hash
@@ -181,40 +219,26 @@ def correct_frame(frame):
         return None
     
     try:
-        # 扩展源点以包含白边
-        # 二维码结构：41x41 数据区 + 2x2 白边 = 45x45 总格子
-        # 比例：45/41 ≈ 1.0975，需要向外扩展约 4.9%
-        # 为了保险起见，使用 45/41 的比例
-        
         top_left, top_right, bottom_left, bottom_right = src_points
         
-        # 计算中心点
-        center_x = (top_left[0] + top_right[0] + bottom_left[0] + bottom_right[0]) / 4
-        center_y = (top_left[1] + top_right[1] + bottom_left[1] + bottom_right[1]) / 4
-        center = np.array([center_x, center_y])
-        
-        # 扩展比例：调整到 1.30，避免黑边同时保留白边
-        scale = 1.30
-        
-        # 从中心向外扩展
-        src_points_expanded = np.float32([
-            center + (top_left - center) * scale,      # 左上
-            center + (top_right - center) * scale,     # 右上
-            center + (bottom_left - center) * scale,   # 左下
-            center + (bottom_right - center) * scale   # 右下
+        # 源点：检测到的定位点中心
+        src_points_direct = np.float32([
+            top_left,      # 左上
+            top_right,     # 右上
+            bottom_left,   # 左下
+            bottom_right   # 右下
         ])
         
-        # 目标点：4 个角点覆盖整个图片
-        # 左上、右上、左下、右下
+        # 目标点：定位点中心在输出图像中的对应位置（无白边版本）
         dst_points = np.float32([
-            [0, 0],                                # 左上
-            [target_size[0] - 1, 0],               # 右上
-            [0, target_size[1] - 1],               # 左下
-            [target_size[0] - 1, target_size[1] - 1]  # 右下
+            DST_TOP_LEFT,      # 左上
+            DST_TOP_RIGHT,     # 右上
+            DST_BOTTOM_LEFT,   # 左下
+            DST_BOTTOM_RIGHT   # 右下
         ])
         
         # 使用透视变换（4个点）
-        M = cv2.getPerspectiveTransform(src_points_expanded, dst_points)
+        M = cv2.getPerspectiveTransform(src_points_direct, dst_points)
         # 使用最近邻插值，保持像素边缘清晰
         return cv2.warpPerspective(frame, M, target_size, flags=cv2.INTER_NEAREST)
     except Exception as e:
