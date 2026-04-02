@@ -22,3 +22,13 @@ decode_debug
 
 .venv
 .vscode
+
+build
+dest_video
+bin
+test
+src_video
+dist
+message
+input
+

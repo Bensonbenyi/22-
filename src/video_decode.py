@@ -262,7 +262,7 @@ def save_bits_to_file(frame_bits_list, output_path, max_frame_id=None):
 # =========================
 def compare_files(decoded_file, original_file, output_file="vout.bin", limit_bytes=None):
     """
-    对比文件
+    对比文件（按帧对比，缺失的帧全部置 0）
     
     参数:
         decoded_file: 解码后的文件
@@ -273,7 +273,10 @@ def compare_files(decoded_file, original_file, output_file="vout.bin", limit_byt
     if not os.path.exists(decoded_file) or not os.path.exists(original_file):
         print("[-] 缺少文件")
         return False
-
+    
+    # 每帧的 payload 大小
+    PAYLOAD_BYTES = 1084
+    
     with open(decoded_file, "rb") as f:
         dec = f.read()
     with open(original_file, "rb") as f:
@@ -281,24 +284,44 @@ def compare_files(decoded_file, original_file, output_file="vout.bin", limit_byt
             ori = f.read(limit_bytes)  # 只读取前 limit_bytes
         else:
             ori = f.read()
-
-    max_len = max(len(dec), len(ori))
+    
+    # 计算帧数
+    n_frames_ori = len(ori) // PAYLOAD_BYTES
+    n_frames_dec = len(dec) // PAYLOAD_BYTES
+    n_frames = max(n_frames_ori, n_frames_dec)
+    
     res = []
-
-    for i in range(max_len):
-        if i < len(dec) and i < len(ori):
-            res.append((~(dec[i] ^ ori[i])) & 0xFF)
+    missing_frames = []
+    
+    # 按帧对比
+    for frame_idx in range(n_frames):
+        start = frame_idx * PAYLOAD_BYTES
+        end = start + PAYLOAD_BYTES
+        
+        # 检查这一帧是否存在
+        if start + PAYLOAD_BYTES <= len(dec) and start + PAYLOAD_BYTES <= len(ori):
+            # 这一帧存在，逐字节对比
+            for i in range(start, end):
+                if i < len(dec) and i < len(ori):
+                    res.append((~(dec[i] ^ ori[i])) & 0xFF)
+                else:
+                    res.append(0)
         else:
-            res.append(0)
-
+            # 这一帧缺失（CRC 失败），全部置 0
+            missing_frames.append(frame_idx)
+            for i in range(PAYLOAD_BYTES):
+                res.append(0)
+    
     with open(output_file, "wb") as f:
         f.write(bytes(res))
-
+    
     correct = sum(bin(b).count("1") for b in res)
-    total = max_len * 8
-
+    total = len(res) * 8
+    
     if limit_bytes:
-        print(f"[+] 对比完成！比较字节数: {max_len}")
+        print(f"[+] 对比完成！比较字节数: {len(res)}")
+    if missing_frames:
+        print(f"[!] 缺失的帧：{missing_frames}")
     accuracy = correct / total * 100
     if accuracy >= 99.995:
         print(f"[+] 准确率: {accuracy:.4f}% ({total - correct} 位错误 / {total} 位)")
