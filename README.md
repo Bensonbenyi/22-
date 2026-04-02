@@ -8,9 +8,8 @@
 - **高分辨率**：1920×1080 视频，128×72 数据矩阵
 - **大定位点**：11×11 回字形定位符，便于手机拍摄识别
 - **无白边设计**：二维码占满整个画面，最大化数据密度
-- **帧重复机制**：每帧重复播放，提高识别率
 - **CRC 校验**：16位 CRC 保证数据完整性
-- **命令行接口**：支持编码/解码/性能测试
+- **交互式界面**：双击运行，逐行提示输入
 
 **应用场景**：
 - 可见光通信（VLC）
@@ -29,13 +28,22 @@ project/
 │   ├── frame_design.py        # 帧结构设计：HEADER + FRAME_ID + DATA_LEN + PAYLOAD + CRC
 │   ├── video_generate.py      # 视频生成：帧 → 二维码图像 → MP4
 │   ├── video_decode.py        # 视频解码：MP4 → 帧提取 → 透视变换 → 比特流
-│   └── perspective_transform.py  # 透视变换：4点定位与图像纠正
-├── cli.py                     # 命令行接口（CLI）
-├── test_performance.py        # 性能测试工具
-├── input.bin                  # 待编码的二进制输入文件
-├── transmitter_video.mp4      # 编码生成的视频输出文件
-├── out.bin                    # 解码输出的二进制文件
-└── vout.bin                   # 逐字节对比结果文件（0xff=正确，其他=错误）
+│   └── perspective_transform.py  # 透视变换：4 点定位与图像纠正
+├── encode_cli.py              # 交互式编码入口
+├── decode_cli.py              # 交互式解码入口
+├── README.md                  # 项目说明文档
+├── input/                     # 测试输入文件目录
+├── src_video/                 # 生成的原始视频目录
+├── dest_video/                # 翻拍的视频目录
+├── message/                   # 解码输出文件目录
+│   ├── 1, 2, 3, 4...         # out.bin 文件（解码输出）
+│   └── v1, v2, v3...         # vout.bin 文件（对比结果）
+└── test/                      # main.c 测试目录
+    ├── main.c                 # C 语言测试工具
+    ├── main.exe               # 编译后的测试程序
+    ├── e{id}.bin             # 编码文件
+    ├── {id}.bin              # 解码文件
+    └── v{id}.bin             # 有效标记文件
 ```
 
 ---
@@ -56,126 +64,175 @@ pip install opencv-python numpy
 
 ---
 
-### 2. 命令行接口（CLI）
+### 2. 使用方法（交互式）
+
+本项目提供**交互式命令行界面**，双击运行即可，程序会逐行提示您输入参数。
 
 #### 编码：二进制文件 → MP4 视频
 
+**运行方式**：
 ```bash
-python cli.py encode <input.bin> <output.mp4> [duration_ms]
+# 方式1：直接运行 Python 脚本
+python encode_cli.py
+
+# 方式2：双击运行 encode.exe（Windows）
 ```
 
-**示例**：
-```bash
-# 编码整个文件
-python cli.py encode input.bin out.mp4
+**交互流程**：
+```
+============================================================
+可见光通信 - 编码程序 (VLC Encoder)
+============================================================
 
-# 只编码前 1000ms 的数据
-python cli.py encode input.bin out.mp4 1000
+本程序将二进制文件编码为二维码视频
+------------------------------------------------------------
+
+请输入要编码的文件路径（例如: input.bin）：
+> input.bin
+
+请输入输出视频文件名（例如: output.mp4）：
+> output.mp4
+
+请输入视频时长限制（毫秒，例如: 1000）：
+> 1000
+
+[*] 正在编码...
+[*] 正在生成视频...
+
+[+] 编码完成!
+    输出文件: output.mp4
+    帧数: 15
+    帧率: 15 FPS
+    视频时长: ~1000 ms
+============================================================
+
+按回车键退出...
 ```
 
-**参数**：
-- `input.bin` - 输入的二进制文件
-- `output.mp4` - 输出的视频文件
-- `duration_ms` - 视频时长（毫秒），可选
-
-**输出信息**：
-- 数据帧数、视频时长、帧率
-- 默认配置：15 FPS，每帧播放 1 次
+**必填参数**：
+- 输入文件路径 - 要编码的二进制文件
+- 输出文件名 - 生成的视频文件
+- 视频时长（毫秒）- 限制编码时长
 
 ---
 
 #### 解码：MP4 视频 → 二进制文件
 
+**运行方式**：
 ```bash
-python cli.py decode <input.mp4> <output.bin> [vout.bin] [duration_ms]
+# 方式1：直接运行 Python 脚本
+python decode_cli.py
+
+# 方式2：双击运行 decode.exe（Windows）
 ```
 
-**示例**：
-```bash
-# 基础解码
-python cli.py decode transmitter_video.mp4 out.bin
+**交互流程**：
+```
+============================================================
+可见光通信 - 解码程序 (VLC Decoder)
+============================================================
 
-# 解码并对比原始文件
-python cli.py decode transmitter_video.mp4 out.bin vout.bin
+本程序从视频中解码恢复二进制文件
+------------------------------------------------------------
 
-# 只对比前 1000ms 的数据
-python cli.py decode transmitter_video.mp4 out.bin vout.bin 1000
+请输入要解码的视频文件路径（例如: captured.mp4）：
+> captured.mp4
+
+请输入解码输出文件名（例如: output.bin）：
+> output.bin
+
+请输入对比结果文件名（例如: vout.bin）：
+> vout.bin
+
+请输入原始文件路径用于对比（例如: input.bin）：
+> input.bin
+
+请输入视频时长限制（毫秒，例如: 1000）：
+> 1000
+
+[*] 正在解码视频...
+[*] 正在保存解码结果...
+[*] 正在生成对比文件...
+
+[+] 解码完成!
+    输出文件: output.bin
+    对比文件: vout.bin
+============================================================
+
+按回车键退出...
 ```
 
-**参数**：
-- `input.mp4` - 输入的视频文件（手机拍摄）
-- `output.bin` - 解码输出的二进制文件
-- `vout.bin` - 对比结果文件，可选
-- `duration_ms` - 限制对比时长（毫秒），可选
-
-**输出信息**：
-- 总帧数、成功提取帧数
-- 解析统计（成功/失败/跳过）
-- 恢复帧数
-- 准确率（如果提供 vout 参数）
+**必填参数**：
+- 输入视频路径 - 手机拍摄的视频文件
+- 输出文件名 - 解码后的二进制文件
+- 对比文件名 - 生成的对比结果文件
+- 原始文件路径 - 用于对比的原始文件
+- 视频时长（毫秒）- 限制对比时长
 
 ---
 
-### 3. 性能测试
+### 3. C 语言测试工具（main.c）
 
+**简介**：
+这是一个独立的 C 语言测试工具，用于对比已生成的测试文件并计算性能指标。
+
+**编译**：
 ```bash
-python test_performance.py <original.bin> <decoded.bin> <video.mp4> [duration_ms]
+gcc test/main.c -o test/main.exe
 ```
+
+**使用方法**：
+```bash
+cd test
+main.exe bench [count]
+```
+
+**可用命令**：
+
+| 命令 | 说明 |
+|------|------|
+| `bench` | 基准测试，对比文件并计算指标 |
+
+**参数**：
+- `count` - 测试文件数量（默认 5）
 
 **示例**：
 ```bash
-python test_performance.py input.bin out.bin transmitter_video.mp4 1000
+# 编译测试工具
+gcc test/main.c -o test/main.exe
+
+# 运行基准测试，分析 10 个文件（文件 1-10）
+cd test
+main.exe bench 10
 ```
 
-**测量指标**：
+**输出指标**：
 
 | 指标 | 说明 |
 |------|------|
-| **有效传输量** | 从第一个位开始，直到遇到第一个错误位的正确接收位数 |
-| **总传输量** | 规定时长内传输的总比特数（不含前导同步码） |
-| **有效传输率** | 有效传输量 ÷ 视频播放时长（bps） |
-| **误码率（BER）** | 未标记错误但实际错误的比特数 ÷ 总传输量 |
-| **丢失率** | 被标记为错误（无效帧）的比特数 ÷ 总传输量 |
-| **帧成功率** | 成功解析的帧数 ÷ 总帧数 |
+| **Val. (b)** | 有效比特数 - 成功解码且在误差容忍范围内的比特 |
+| **All (b)** | 总比特数 |
+| **Err. (%)** | 误码率 = 错误比特数 / 总比特数 |
+| **Lost (%)** | 丢失率 = 标记为无效的比特数 / 总比特数 |
 
 **输出示例**：
 ```
-============================================================
-视频传输性能测试
-============================================================
+Auxiliary Tool of Project 1 (Version 1.0)
+Author: Dr. Wei HUANG, School of Informatics, Xiamen University
 
-[视频信息]
-  视频时长: 2814.79 ms
-  指定测试时长: 1000 ms
-
-[*] 正在分析视频帧...
-
-[帧统计]
-  提取帧数: 149
-  去重跳过: 20
-  有效帧: 117
-  无效帧: 32 (CRC失败: 32, 解码失败: 0)
-  去重后有效帧: 15 (帧ID: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
-
-[*] 正在逐帧对比...
-
-============================================================
-测试结果
-============================================================
-
-[传输量统计]
-  有效传输量: 130,080 bits (16,260.0 bytes)
-  总传输量:   1,299,280 bits (162,410.0 bytes)
-  检查比特数: 130,080 bits
-  实际错误比特: 0 bits
-  标记错误比特: 279,040 bits
-
-[性能指标]
-  有效传输率: 130,080.00 bps (130.08 Kbps)
-  误码率(BER): 0.0000%
-  丢失率: 21.48%
-  帧成功率: 78.52%
+Starting benchmarking ...
+ID      Val. (b)        All (b)         Err. (%)        Lost (%)
+=====   ==========      ============    ==========      ==========
+    1   130080.0          130080.0          0.00            0.00
+    2   130080.0          130080.0          0.00            0.00
+    8   130075.0          130080.0          0.00            0.00
+...
+Avg.    130079.5          130080.0          0.00            0.00
 ```
+
+**注意**：
+- 测试文件需要预先存在：`e{id}.bin`（编码文件）、`{id}.bin`（解码文件）、`v{id}.bin`（有效标记文件）
+- 误差容忍度设置为 0.03%（TORRENT_ERR_RATE）
 
 ---
 
@@ -211,28 +268,37 @@ python test_performance.py input.bin out.bin transmitter_video.mp4 1000
 | `CELL_SIZE` | frame_design.py | 15 | 单格像素大小 |
 | `FINDER_SIZE` | frame_design.py | 11 | 定位点大小 |
 | `PAYLOAD_LEN` | frame_design.py | 8672 | 每帧数据载荷位数 |
-| `fps` | cli.py | 15 | 视频帧率 |
-| `frame_repeat` | cli.py | 1 | 每帧重复次数 |
+| `fps` | encode_cli.py | 15 | 视频帧率 |
 
 ---
 
 ## 🔄 完整工作流
 
+### 编码解码工作流
+
 ```bash
 # 1. 准备输入文件
-# 确保 input.bin 存在于项目目录
+# 将待编码的二进制文件放入 input/ 目录
 
-# 2. 编码成视频（1000ms）
-python cli.py encode input.bin transmitter_video.mp4 1000
+# 2. 编码成视频（双击运行 encode.exe 或运行 python encode_cli.py）
+# 按提示输入：input.bin, output.mp4, 1000
 
-# 3. 用手机拍摄视频，替换 transmitter_video.mp4
+# 3. 用手机翻拍视频，保存到 dest_video/ 目录
+# 例如：dest_video/captured_video.mp4
 
-# 4. 解码视频
-python cli.py decode transmitter_video.mp4 out.bin vout.bin 1000
+# 4. 解码视频（双击运行 decode.exe 或运行 python decode_cli.py）
+# 按提示输入：captured_video.mp4, out.bin, vout.bin, input.bin, 1000
 
-# 5. 性能测试
-python test_performance.py input.bin out.bin transmitter_video.mp4 1000
+# 5. 使用 main.c 测试（可选）
+cd test
+main.exe bench 10
 ```
+
+### 文件命名约定
+
+**message/ 目录**：
+- `1`, `2`, `3`, `4`... - 解码输出文件（相当于 out.bin）
+- `v1`, `v2`, `v3`... - 对比结果文件（相当于 vout.bin）
 
 ---
 
@@ -245,27 +311,14 @@ python test_performance.py input.bin out.bin transmitter_video.mp4 1000
 - 帧率设置过高，手机快门无法同步
 
 **建议**：
-- 使用 15 FPS，每帧播放 1 次
+- 使用 15 FPS
 - 确保拍摄环境光线充足
 - 手机与屏幕保持平行，减少透视变形
-
-### Q: 如何优化传输速率？
-**A**: 
-- 降低帧率（15 FPS 比 30 FPS 更稳定）
-- 减少每帧重复次数（1 次比 2 次效率更高）
-- 确保视频质量，减少 CRC 失败帧
 
 ### Q: vout.bin 是什么？
 **A**: 逐字节对比结果文件：
 - `0xff` (255) - 该字节所有位都正确
 - 其他值 - 表示错误的位（按位取反的异或结果）
-
-### Q: 如何测试不同帧率？
-**A**: 修改 `cli.py` 中的参数：
-```python
-fps = 15          # 帧率
-frame_repeat = 1  # 每帧重复次数
-```
 
 ---
 
@@ -287,14 +340,23 @@ MIT License
 
 ## 📝 更新日志
 
-### 2026年3月25日
-- 优化帧率为 15 FPS，每帧播放 1 次
-- 实现 99.9992% 准确率（130080 位中仅 1 位错误）
-- 有效传输率达到 130.08 Kbps
-- 添加命令行接口（CLI）
-- 添加性能测试工具
+### 2026 年 4 月 2 日
+- 改为交互式界面，双击运行，逐行提示输入
+- 所有参数必须输入，不可跳过
+- 删除 cli.py、test_performance.py、build_exe.py
+- 更新 README 文档
 
-### 2026年3月19日
+### 2026 年 3 月 30 日
+- 添加 C 语言辅助测试工具（main.c）使用说明
+- 支持 15 FPS 帧率
+- 实现帧丢失自动标记（vout.bin 自动填充 0x00）
+
+### 2026 年 3 月 25 日
+- 优化帧率为 15 FPS
+- 实现 99.9992% 准确率
+- 有效传输率达到 130.08 Kbps
+
+### 2026 年 3 月 19 日
 - 初始版本实现
 - 1920×1080 分辨率，11×11 定位点
 - 无白边设计
@@ -304,4 +366,4 @@ MIT License
 
 *Visible Light Communication Project*
 
-**最后修改**: 2026 年 3 月 25 日
+**最后修改**: 2026 年 4 月 2 日
